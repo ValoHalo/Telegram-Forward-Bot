@@ -1,0 +1,6 @@
+# 要求 python-telegram-bot 版本为 20.7
+python-telegram-bot==20.7
+# 需要安装 python-dotenv 来读取 .env 文件
+python-dotenv
+# 必须安装 socks 依赖，才能支持 SOCKS5 代理
+python-telegram-bot[socks]==20.7
