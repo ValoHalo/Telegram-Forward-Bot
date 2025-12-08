@@ -13,7 +13,10 @@ import telegram.ext
 # 1.1 隐藏 httpx 轮询日志
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# 1.2 配置主程序日志格式和级别
+# 1.2 隐藏 apscheduler 的 Job 执行日志 (INFO级别)
+logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING) # <-- 新增行
+
+# 1.3 配置主程序日志格式和级别
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -95,18 +98,15 @@ load_config()
 MEDIA_GROUP_CACHE = {}
 
 # -------------------------------
-# 3. 任务: 心跳 (Heartbeat) - 修复 TypeError
+# 3. 任务: 心跳 (Heartbeat) - 异步单次执行
 # -------------------------------
 
-# 必须是 async 函数，与 JobQueue 内部的 await 机制兼容
 async def heartbeat_task(context: telegram.ext.ContextTypes.DEFAULT_TYPE): 
     """周期性地更新心跳文件一次，由 JobQueue 负责重复调用"""
     if not HB_FILE or not HB_INTERVAL:
-         # 这是一个周期性任务，如果配置无效，只记录警告，但不返回或抛出
          return
          
     try:
-        # 注意：此处不应使用 await，因为文件 I/O 是同步操作
         with open(HB_FILE, 'w') as f:
             f.write(str(time.time()))
     except Exception as e:
