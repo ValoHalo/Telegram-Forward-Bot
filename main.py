@@ -4,8 +4,8 @@ import os
 import json
 import sys
 import time
-import telegram
-import telegram.ext
+import telegram 
+import telegram.ext 
 
 # -------------------------------
 # 1. 初始化与日志
@@ -30,8 +30,8 @@ BOT_TOKEN = None
 OWNER_ID = None
 PROXY_URL = None
 DESTINATIONS = []
-HB_FILE = None
-HB_INTERVAL = None
+HB_FILE = None        # Heartbeat File Name
+HB_INTERVAL = None    # Heartbeat Interval (seconds)
 
 def load_config():
     """从 config.json 加载所有配置"""
@@ -95,23 +95,20 @@ load_config()
 MEDIA_GROUP_CACHE = {}
 
 # -------------------------------
-# 3. 异步任务: 心跳 (Heartbeat)
+# 3. 任务: 心跳 (Heartbeat)
 # -------------------------------
 
-async def heartbeat_task():
-    """每隔固定秒数更新心跳文件"""
+def heartbeat_task(context: telegram.ext.ContextTypes.DEFAULT_TYPE): 
+    """周期性地更新心跳文件一次，由 JobQueue 负责重复调用"""
     if not HB_FILE or not HB_INTERVAL:
-         logger.warning("⚠️ 心跳配置缺失或无效，心跳任务未启动。")
+         logger.warning("⚠️ 心跳配置缺失或无效，周期性心跳任务未运行。")
          return
          
-    while True:
-        try:
-            with open(HB_FILE, 'w') as f:
-                f.write(str(time.time()))
-        except Exception as e:
-            logger.error(f"❌ 写入心跳文件失败: {e}")
-            
-        await asyncio.sleep(HB_INTERVAL)
+    try:
+        with open(HB_FILE, 'w') as f:
+            f.write(str(time.time()))
+    except Exception as e:
+        logger.error(f"❌ 周期性写入心跳文件失败: {e}")
 
 
 # -------------------------------
@@ -238,7 +235,7 @@ def main():
         
         # 仅在配置有效时执行心跳逻辑
         if HB_FILE and HB_INTERVAL:
-            # 1. 立即生成心跳文件（首次启动不延迟）
+            # 1. 立即生成心跳文件（首次启动不延迟），防止看门狗误判
             logger.info("❤️ 正在创建初始心跳文件...")
             try:
                 with open(HB_FILE, 'w') as f:
@@ -246,9 +243,9 @@ def main():
             except Exception as e:
                 logger.error(f"❌ 首次写入心跳文件失败，请检查文件权限: {e}")
             
-            # 2. 启动周期性心跳任务
+            # 2. 启动周期性心跳任务 
             app.job_queue.run_repeating(
-                lambda context: context.application.create_task(heartbeat_task()), 
+                heartbeat_task, # 直接传递同步函数
                 interval=HB_INTERVAL
             )
         else:
