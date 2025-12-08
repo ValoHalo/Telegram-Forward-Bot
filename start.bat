@@ -1,13 +1,13 @@
 @echo off
 setlocal
 
-set "VENV_NAME=venv"
-set "PYTHON_VERSION=3.12"
-set "PYTHON_SCRIPT=main.py"
+set "VENV_NAME=.venv"
+set "PYTHON_VERSION=3.12" :: Telegram bot 库 20.7 版本不支持 3.14
+set "PYTHON_SCRIPT=watchdog.py" :: 引入 watchdog 管理 main.py 的生命周期
 set "REQUIREMENTS_FILE=requirements.txt"
 
 echo ######################################################
-echo # 机器人启动脚本 (Python %PYTHON_VERSION%)
+echo # Telegram机器人启动脚本 (Python %PYTHON_VERSION%)
 echo ######################################################
 
 :: 1. 若无虚拟环境则创建
@@ -23,7 +23,7 @@ if not exist "%VENV_NAME%\Scripts\activate.bat" (
         goto :end
     )
 ) else (
-    echo Virtual environment already exists.
+    echo Virtual environment already exists. [cite: 2]
 )
 
 :: 2. 激活虚拟环境
@@ -36,14 +36,16 @@ if exist "%REQUIREMENTS_FILE%" (
     pip install -r "%REQUIREMENTS_FILE%"
     :: 检查安装是否失败
     if errorlevel 1 (
-        echo ERROR: Failed to install packages. Check your internet connection.
+        echo ERROR: Failed to install packages.
+        echo Check your internet connection. [cite: 3]
         goto :deactivate
     )
 ) else (
     echo WARNING: %REQUIREMENTS_FILE% not found. Skipping dependency installation.
 )
 
-echo Launching %PYTHON_SCRIPT%...
+:: 启动看门狗脚本，由它来循环启动 main.py
+echo Launching %PYTHON_SCRIPT% (Watchdog)...
 python "%PYTHON_SCRIPT%"
 
 :deactivate
@@ -51,5 +53,5 @@ echo Deactivating virtual environment...
 call deactivate
 
 :end
-echo.
+echo. [cite: 4]
 pause

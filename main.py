@@ -2,57 +2,123 @@ import logging
 import asyncio
 import os
 import json
-from dotenv import load_dotenv
-from telegram import Update, InputMediaPhoto, InputMediaVideo, InputMediaAudio, InputMediaDocument
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+import sys
+import time
+import telegram # 导入整个 telegram 模块
+import telegram.ext # 导入整个 telegram.ext 模块
 
 # -------------------------------
 # 1. 初始化与日志
 # -------------------------------
+# 1.1 隐藏 httpx 轮询日志
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# 1.2 配置主程序日志格式和级别
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
 # -------------------------------
-# 2. 配置加载逻辑 (从 .env 获取文件路径，再加载 JSON)
+# 2. 统一配置加载逻辑
 # -------------------------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID", 0))
-PROXY_URL = os.getenv("PROXY_URL")
-CONFIG_PATH = os.getenv("CONFIG_PATH", "./config.json") # 默认值：config.json
+CONFIG_FILE = "config.json" 
 
+# 全局配置变量
+BOT_TOKEN = None
+OWNER_ID = None
+PROXY_URL = None
 DESTINATIONS = []
-try:
-    logger.info(f"📋 尝试从路径 {CONFIG_PATH} 加载业务配置...")
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        config_data = json.load(f)
-        DESTINATIONS = config_data.get('DESTINATIONS', [])
-    logger.info("✅ 业务配置加载成功。")
-except FileNotFoundError:
-    logger.critical(f"⛔ 找不到配置文件: {CONFIG_PATH}，程序无法启动。")
-    exit(1)
-except json.JSONDecodeError as e:
-    logger.critical(f"⛔ 配置文件 {CONFIG_PATH} 格式错误，请检查 JSON 语法: {e}")
-    exit(1)
+HB_FILE = None
+HB_INTERVAL = None
 
-# 检查
-if not BOT_TOKEN or not OWNER_ID:
-    logger.critical("⛔ 未配置 BOT_TOKEN 或 OWNER_ID，程序无法启动。")
-    exit(1)
+def load_config():
+    """从 config.json 加载所有配置"""
+    global BOT_TOKEN, OWNER_ID, PROXY_URL, DESTINATIONS, HB_FILE, HB_INTERVAL
+    
+    logger.info(f"📋 正在加载配置文件: {CONFIG_FILE}...")
+    
+    if not os.path.exists(CONFIG_FILE):
+        logger.critical(f"⛔ 找不到配置文件: {CONFIG_FILE}。程序将退出。")
+        sys.exit(1)
+
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            
+        # 加载 bot 部分配置
+        bot_config = config.get("bot", {})
+        BOT_TOKEN = bot_config.get("token")
+        OWNER_ID = bot_config.get("owner_id")
+        PROXY_URL = bot_config.get("proxy_url")
+        
+        # 加载 watchdog 部分配置
+        watchdog_config = config.get("watchdog", {})
+        HB_FILE = watchdog_config.get("heartbeat_file")
+        HB_INTERVAL = watchdog_config.get("heartbeat_interval_s")
+        
+        # 加载 destinations 部分配置
+        DESTINATIONS = config.get("destinations", [])
+        
+        # 校验关键配置
+        if not BOT_TOKEN or not OWNER_ID:
+            logger.critical("⛔ 未配置 BOT_TOKEN 或 OWNER_ID。程序将退出。")
+            sys.exit(1) 
+            
+        if not isinstance(OWNER_ID, int):
+            try:
+                OWNER_ID = int(OWNER_ID)
+            except ValueError:
+                logger.critical("⛔ 'owner_id' 必须是数字。程序将退出。")
+                sys.exit(1)
+
+        logger.info(f"✅ 配置加载成功。Owner ID: {OWNER_ID}")
+        logger.info(f"✅ 已加载 {len(DESTINATIONS)} 个转发目标规则。")
+        
+        if PROXY_URL:
+            logger.info(f"🌐 代理已启用: {PROXY_URL}")
+        if HB_FILE and HB_INTERVAL:
+             logger.info(f"❤️ 心跳配置：文件 {HB_FILE}，间隔 {HB_INTERVAL}s。")
+
+    except json.JSONDecodeError as e:
+        logger.critical(f"⛔ 配置文件 {CONFIG_FILE} 格式错误 (JSON 语法错误): {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.critical(f"⛔ 加载配置文件时发生未知错误: {e}")
+        sys.exit(1)
+
+# 执行加载
+load_config()
 
 # MediaGroup 缓存
 MEDIA_GROUP_CACHE = {}
 
+# -------------------------------
+# 3. 异步任务: 心跳 (Heartbeat)
+# -------------------------------
+
+async def heartbeat_task():
+    """每隔固定秒数更新心跳文件"""
+    if not HB_FILE or not HB_INTERVAL:
+         logger.warning("⚠️ 心跳配置缺失或无效，心跳任务未启动。")
+         return
+         
+    while True:
+        try:
+            with open(HB_FILE, 'w') as f:
+                f.write(str(time.time()))
+        except Exception as e:
+            logger.error(f"❌ 写入心跳文件失败: {e}")
+            
+        await asyncio.sleep(HB_INTERVAL)
+
 
 # -------------------------------
-# 3. 核心转发逻辑 (保持不变)
+# 4. 核心转发逻辑
 # -------------------------------
 
-async def forward_to_destinations(context: ContextTypes.DEFAULT_TYPE, message=None, media_list=None):
+async def forward_to_destinations(context: telegram.ext.ContextTypes.DEFAULT_TYPE, message=None, media_list=None):
     """
     核心分发函数：根据 DESTINATIONS 列表转发消息或媒体组。
     """
@@ -84,28 +150,25 @@ async def forward_to_destinations(context: ContextTypes.DEFAULT_TYPE, message=No
     # 遍历统一的目标列表
     for dest in DESTINATIONS:
         chat_id = dest.get('chat_id')
-        
-        topic_ids = dest.get('topic_ids') 
-        topic_id = dest.get('topic_id')    
+        topic_ids = dest.get('topic_ids', []) 
 
-        target_threads = [None] 
+        target_threads = []
 
-        if topic_ids and isinstance(topic_ids, list):
+        # 话题判断逻辑
+        if not topic_ids:
+            target_threads = [None]
+        else:
             target_threads = topic_ids
-        elif topic_id is not None:
-            target_threads = [topic_id]
 
-        # 对目标群组的每个话题（或主线程）执行发送
+        # 对目标群组的每个话题（或主线程 None）执行发送
         for thread_id in target_threads:
             await send_action(chat_id, thread_id=thread_id)
 
 
 # -------------------------------
-# 4. 业务逻辑 (MediaGroup/Handler 保持不变)
+# 5. 业务逻辑
 # -------------------------------
-
-async def process_media_group(context: ContextTypes.DEFAULT_TYPE, media_group_id: str):
-    """处理相册缓存并发送"""
+async def process_media_group(context: telegram.ext.ContextTypes.DEFAULT_TYPE, media_group_id: str):
     await asyncio.sleep(2) 
 
     if media_group_id not in MEDIA_GROUP_CACHE:
@@ -114,27 +177,27 @@ async def process_media_group(context: ContextTypes.DEFAULT_TYPE, media_group_id
     messages = MEDIA_GROUP_CACHE.pop(media_group_id)
     messages.sort(key=lambda x: x.message_id)
 
-    # 构建 InputMedia
     media_list = []
     for msg in messages:
         caption = msg.caption
         entities = msg.caption_entities
         
+        # 使用 telegram.InputMediaXxx
         if msg.photo:
-            media_list.append(InputMediaPhoto(msg.photo[-1].file_id, caption=caption, caption_entities=entities))
+            media_list.append(telegram.InputMediaPhoto(msg.photo[-1].file_id, caption=caption, caption_entities=entities))
         elif msg.video:
-            media_list.append(InputMediaVideo(msg.video.file_id, caption=caption, caption_entities=entities))
+            media_list.append(telegram.InputMediaVideo(msg.video.file_id, caption=caption, caption_entities=entities))
         elif msg.audio:
-            media_list.append(InputMediaAudio(msg.audio.file_id, caption=caption, caption_entities=entities))
+            media_list.append(telegram.InputMediaAudio(msg.audio.file_id, caption=caption, caption_entities=entities))
         elif msg.document:
-            media_list.append(InputMediaDocument(msg.document.file_id, caption=caption, caption_entities=entities))
+            media_list.append(telegram.InputMediaDocument(msg.document.file_id, caption=caption, caption_entities=entities))
 
     if media_list:
         logger.info(f"📤 正在转发相册 (共 {len(media_list)} 个文件)")
         await forward_to_destinations(context, media_list=media_list)
 
 
-async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handler(update: telegram.Update, context: telegram.ext.ContextTypes.DEFAULT_TYPE):
     msg = update.message
 
     if not msg or msg.chat.type != "private" or msg.from_user.id != OWNER_ID:
@@ -142,7 +205,6 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg.text and msg.text.startswith("/"):
         return
 
-    # --- 场景 A: 相册消息 ---
     if msg.media_group_id:
         is_first = msg.media_group_id not in MEDIA_GROUP_CACHE
         
@@ -155,7 +217,6 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.application.create_task(process_media_group(context, msg.media_group_id))
         return
 
-    # --- 场景 B: 普通消息 ---
     logger.info(f"📤 正在转发单条消息 (ID: {msg.message_id})")
     await forward_to_destinations(context, message=msg)
 
@@ -164,20 +225,52 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 主程序
 # -----------------------------
 def main():
-    builder = ApplicationBuilder().token(BOT_TOKEN)
-    
-    if PROXY_URL and PROXY_URL.strip():
-        builder.proxy(PROXY_URL)
-        logger.info(f"🌐 代理已配置: {PROXY_URL}")
+    try:
+        # 使用 telegram.ext.ApplicationBuilder
+        builder = telegram.ext.ApplicationBuilder().token(BOT_TOKEN)
+        
+        if PROXY_URL and PROXY_URL.strip():
+            builder.proxy(PROXY_URL)
 
-    app = builder.build()
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE, handler))
+        app = builder.build()
+        # 使用 telegram.ext.MessageHandler 和 telegram.ext.filters
+        app.add_handler(telegram.ext.MessageHandler(telegram.ext.filters.ChatType.PRIVATE, handler))
+        
+        # 仅在配置有效时执行心跳逻辑
+        if HB_FILE and HB_INTERVAL:
+            # 1. 立即生成心跳文件（首次启动不延迟）
+            logger.info("❤️ 正在创建初始心跳文件...")
+            try:
+                with open(HB_FILE, 'w') as f:
+                    f.write(str(time.time()))
+            except Exception as e:
+                logger.error(f"❌ 首次写入心跳文件失败，请检查文件权限: {e}")
+            
+            # 2. 启动周期性心跳任务
+            app.job_queue.run_repeating(
+                lambda context: context.application.create_task(heartbeat_task()), 
+                interval=HB_INTERVAL
+            )
+        else:
+            logger.warning("⚠️ 心跳功能已禁用 (缺少配置)。")
+        
+        logger.info(f"✅ 机器人已启动，正在监听...")
+        
+        # 启动轮询
+        app.run_polling(allowed_updates=telegram.Update.ALL_TYPES, close_loop=False)
 
-    logger.info(f"✅ 机器人已启动，正在监听 Owner ID: {OWNER_ID}")
-    logger.info(f"📋 配置文件路径: {CONFIG_PATH}")
-    logger.info(f"📋 总转发目标数量: {len(DESTINATIONS)} 个配置项")
-
-    app.run_polling()
+    except KeyboardInterrupt:
+        logger.info("👋 机器人接收到 Ctrl+C，正常关闭。")
+        # 退出时清理心跳文件
+        if HB_FILE and os.path.exists(HB_FILE):
+             os.remove(HB_FILE)
+        sys.exit(0)
+    except Exception as e:
+        logger.critical(f"🔥 发生未捕获的严重错误，程序崩溃: {e}", exc_info=True)
+        # 异常退出时清理心跳文件
+        if HB_FILE and os.path.exists(HB_FILE):
+             os.remove(HB_FILE)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
