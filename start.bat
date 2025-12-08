@@ -7,7 +7,7 @@ set "PYTHON_SCRIPT=watchdog.py" :: 引入 watchdog 管理 main.py 的生命周�
 set "REQUIREMENTS_FILE=requirements.txt"
 
 echo ######################################################
-echo # Telegram机器人启动脚本 (Python %PYTHON_VERSION%)
+echo # Telegram Bot Launcher (Python %PYTHON_VERSION%)
 echo ######################################################
 
 :: 1. 若无虚拟环境则创建

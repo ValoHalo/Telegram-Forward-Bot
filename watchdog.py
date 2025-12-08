@@ -5,9 +5,9 @@ import logging
 import os
 import json 
 
-# ==========================================
+# -----------------------------------------
 #              看门狗配置
-# ==========================================
+# -----------------------------------------
 BOT_SCRIPT = "main.py"
 CONFIG_FILE = "config.json"
 
@@ -62,9 +62,9 @@ HEARTBEAT_FILE = LOADED_CONFIG["HB_FILE"]
 RESTART_DELAY = LOADED_CONFIG["RESTART_DELAY"]
 HEARTBEAT_TIMEOUT = LOADED_CONFIG["HB_TIMEOUT"]
 MAX_CONSECUTIVE_RESTARTS = LOADED_CONFIG["MAX_RESTARTS"]
-# ==========================================
+# -----------------------------------------
 #              看门狗配置 (结束)
-# ==========================================
+# -----------------------------------------
 
 
 def is_heartbeat_alive():

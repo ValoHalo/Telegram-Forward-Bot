@@ -4,8 +4,8 @@ import os
 import json
 import sys
 import time
-import telegram # 导入整个 telegram 模块
-import telegram.ext # 导入整个 telegram.ext 模块
+import telegram
+import telegram.ext
 
 # -------------------------------
 # 1. 初始化与日志

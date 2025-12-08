@@ -2,7 +2,7 @@
 把你私发给机器人的消息转发到你的群组中，主要是方便我偷懒（）
 
 # 要求
-Python 3.12 （我没有测试过更多版本，已知3.14不支持）
+Python 3.12 （使用的是 20.7 版本的 Telegram bot Python 库，已知 Python 3.14 不支持）
 
 # 用法
  1. 去 Botfarther 申请一个 Bot，并得到其 token
@@ -11,8 +11,8 @@ Python 3.12 （我没有测试过更多版本，已知3.14不支持）
 ```json
 {
   "bot": { // 基础配置
-    "token": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi", // Botfather 处申请到的机器人 token
-    "owner_id": 123456789, // 你的 ID
+    "token": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi", // 在 Botfather 处申请到的机器人 token
+    "owner_id": 123456789, // 你的 Telegram ID
     "proxy_url": "socks5://0.0.0.0:12345" // 代理地址，不需要则留空：""
   },
   "watchdog": { // watchdog 机制的配置，一般无需修改
@@ -46,7 +46,7 @@ Python 3.12 （我没有测试过更多版本，已知3.14不支持）
  - [x]  正常转发 MediaGroup
  - [x]  添加 Watchdog 机制
  - [ ]  转发显示来源
- - [ ]  处理收到的信息中的链接（如把域名中的 twitter 改成 fxtwitter ）
+ - [ ]  处理收到的信息中的链接（如把域名中的 twitter 改成 fxtwitter）
  - [ ]  命令？ ~~（没想过能用什么命令）~~ 
 
 # Special Thanks
