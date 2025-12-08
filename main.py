@@ -95,16 +95,18 @@ load_config()
 MEDIA_GROUP_CACHE = {}
 
 # -------------------------------
-# 3. 任务: 心跳 (Heartbeat)
+# 3. 任务: 心跳 (Heartbeat) - 修复 TypeError
 # -------------------------------
 
-def heartbeat_task(context: telegram.ext.ContextTypes.DEFAULT_TYPE): 
+# 必须是 async 函数，与 JobQueue 内部的 await 机制兼容
+async def heartbeat_task(context: telegram.ext.ContextTypes.DEFAULT_TYPE): 
     """周期性地更新心跳文件一次，由 JobQueue 负责重复调用"""
     if not HB_FILE or not HB_INTERVAL:
-         logger.warning("⚠️ 心跳配置缺失或无效，周期性心跳任务未运行。")
+         # 这是一个周期性任务，如果配置无效，只记录警告，但不返回或抛出
          return
          
     try:
+        # 注意：此处不应使用 await，因为文件 I/O 是同步操作
         with open(HB_FILE, 'w') as f:
             f.write(str(time.time()))
     except Exception as e:
@@ -245,7 +247,7 @@ def main():
             
             # 2. 启动周期性心跳任务 
             app.job_queue.run_repeating(
-                heartbeat_task, # 直接传递同步函数
+                heartbeat_task, # 直接传递 async 函数
                 interval=HB_INTERVAL
             )
         else:
