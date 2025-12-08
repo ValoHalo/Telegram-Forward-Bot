@@ -14,12 +14,12 @@ import telegram.ext
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # 1.2 隐藏 apscheduler 的 Job 执行日志 (INFO级别)
-logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING) # <-- 新增行
+logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
 
 # 1.3 配置主程序日志格式和级别
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.WARNING
 )
 logger = logging.getLogger(__name__)
 
