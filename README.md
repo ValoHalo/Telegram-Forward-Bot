@@ -13,7 +13,8 @@ Python 3.12 （使用的是 20.7 版本的 Telegram bot Python 库，已知 Pyth
   "bot": { // 基础配置
     "token": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi", // 在 Botfather 处申请到的机器人 token
     "owner_id": 123456789, // 你的 Telegram ID
-    "proxy_url": "socks5://0.0.0.0:12345" // 代理地址，不需要则留空：""
+    "proxy_url": "socks5://0.0.0.0:12345", // 代理地址，不需要则留空：""
+    "silent_forwarding": false // 全局静默发送，默认为 false
   },
   "watchdog": { // watchdog 机制的配置，一般无需修改
     "heartbeat_file": "bot.heartbeat", // 心跳文件的名字
@@ -26,14 +27,15 @@ Python 3.12 （使用的是 20.7 版本的 Telegram bot Python 库，已知 Pyth
     {
       "chat_id": -1001234567890, // 群组 ID
       "topic_ids": [] // 话题 ID，留空表示群组没有开启话题功能
+    }
+    {
+      "chat_id": -1001234567890,
+      "topic_ids": []
     },
     {
       "chat_id": -1005555555555,
-      "topic_ids": [1]
-    },
-    {
-      "chat_id": -1004444444444,
-      "topic_ids": [1, 2, 3]
+      "topic_ids": [1, 2],
+      "silent_forwarding": true // 覆盖全局设置
     }
   ]
 }
@@ -45,6 +47,7 @@ Python 3.12 （使用的是 20.7 版本的 Telegram bot Python 库，已知 Pyth
  - [x]  配置文件独立于程序
  - [x]  正常转发 MediaGroup
  - [x]  添加 Watchdog 机制
+ - [x]  添加静默发送功能
  - [ ]  转发显示来源
  - [ ]  处理收到的信息中的链接（如把域名中的 twitter 改成 fxtwitter）
  - [ ]  命令？ ~~（没想过能用什么命令）~~ 
