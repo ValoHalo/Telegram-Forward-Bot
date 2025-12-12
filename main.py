@@ -6,6 +6,7 @@ import sys
 import time
 import telegram 
 import telegram.ext 
+import httpx # Required for explicit error handling
 
 # -------------------------------
 # 1. 初始化与日志
@@ -13,13 +14,13 @@ import telegram.ext
 # 1.1 隐藏 httpx 轮询日志
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# 1.2 隐藏 apscheduler 的 Job 执行日志 (INFO级别)
+# 1.2 隐藏 apscheduler 的 Job 执行日志
 logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
 
 # 1.3 配置主程序日志格式和级别
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.WARNING
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -35,10 +36,11 @@ PROXY_URL = None
 DESTINATIONS = []
 HB_FILE = None        # Heartbeat File Name
 HB_INTERVAL = None    # Heartbeat Interval (seconds)
+SILENT_FORWARDING = False # 全局静默转发标志
 
 def load_config():
     """从 config.json 加载所有配置"""
-    global BOT_TOKEN, OWNER_ID, PROXY_URL, DESTINATIONS, HB_FILE, HB_INTERVAL
+    global BOT_TOKEN, OWNER_ID, PROXY_URL, DESTINATIONS, HB_FILE, HB_INTERVAL, SILENT_FORWARDING
     
     logger.info(f"📋 正在加载配置文件: {CONFIG_FILE}...")
     
@@ -55,6 +57,7 @@ def load_config():
         BOT_TOKEN = bot_config.get("token")
         OWNER_ID = bot_config.get("owner_id")
         PROXY_URL = bot_config.get("proxy_url")
+        SILENT_FORWARDING = bot_config.get("silent_forwarding", False)
         
         # 加载 watchdog 部分配置
         watchdog_config = config.get("watchdog", {})
@@ -81,6 +84,8 @@ def load_config():
         
         if PROXY_URL:
             logger.info(f"🌐 代理已启用: {PROXY_URL}")
+        if SILENT_FORWARDING:
+             logger.info("🔇 全局静默转发已启用。")
         if HB_FILE and HB_INTERVAL:
              logger.info(f"❤️ 心跳配置：文件 {HB_FILE}，间隔 {HB_INTERVAL}s。")
 
@@ -123,28 +128,40 @@ async def forward_to_destinations(context: telegram.ext.ContextTypes.DEFAULT_TYP
     """
     
     # 定义发送动作的内部函数
-    async def send_action(chat_id, thread_id=None):
+    async def send_action(chat_id, thread_id=None, is_silent=False): # 接收静默标志
+        target_str = f"{chat_id}" + (f" (Topic {thread_id})" if thread_id else "")
+
         try:
             if not chat_id:
                 logger.error("❌ 目标配置缺少 'chat_id'，跳过此目标。")
                 return
 
+            params = {
+                "chat_id": chat_id,
+                "message_thread_id": thread_id,
+                "disable_notification": is_silent # 应用静默标志
+            }
+
             if media_list:
                 # 发送相册
                 await context.bot.send_media_group(
-                    chat_id=chat_id, 
-                    message_thread_id=thread_id, 
-                    media=media_list
+                    media=media_list, 
+                    **params
                 )
             elif message:
                 # 转发单条
                 await message.copy(
-                    chat_id=chat_id, 
-                    message_thread_id=thread_id
+                    **params
                 )
+        
+        # 异常捕获块 (使用全名引用)
+        except httpx.RemoteProtocolError as e:
+            logger.critical(f"❌ 转发到 {target_str} 时发生连接错误 (RemoteProtocolError)。该目标可能暂时不可达或网络中断。错误信息: {e}")
+        except telegram.error.TelegramError as e:
+            logger.error(f"❌ 转发到 {target_str} 失败 (Telegram API Error): {e}")
         except Exception as e:
-            target_str = f"{chat_id}" + (f" (Topic {thread_id})" if thread_id else "")
-            logger.error(f"❌ 转发到 {target_str} 失败: {e}")
+            logger.error(f"❌ 转发到 {target_str} 失败 (Unknown Error): {e}", exc_info=True)
+
 
     # 遍历统一的目标列表
     for dest in DESTINATIONS:
@@ -153,6 +170,9 @@ async def forward_to_destinations(context: telegram.ext.ContextTypes.DEFAULT_TYP
 
         target_threads = []
 
+        # 确定此目标的静默状态 (目标配置优先于全局配置)
+        is_silent_dest = dest.get('silent_forwarding', SILENT_FORWARDING) 
+        
         # 话题判断逻辑
         if not topic_ids:
             target_threads = [None]
@@ -161,7 +181,7 @@ async def forward_to_destinations(context: telegram.ext.ContextTypes.DEFAULT_TYP
 
         # 对目标群组的每个话题（或主线程 None）执行发送
         for thread_id in target_threads:
-            await send_action(chat_id, thread_id=thread_id)
+            await send_action(chat_id, thread_id=thread_id, is_silent=is_silent_dest) # 传递静默标志
 
 
 # -------------------------------
@@ -180,8 +200,6 @@ async def process_media_group(context: telegram.ext.ContextTypes.DEFAULT_TYPE, m
     for msg in messages:
         caption = msg.caption
         entities = msg.caption_entities
-        
-        # 使用 telegram.InputMediaXxx
         if msg.photo:
             media_list.append(telegram.InputMediaPhoto(msg.photo[-1].file_id, caption=caption, caption_entities=entities))
         elif msg.video:
@@ -225,14 +243,12 @@ async def handler(update: telegram.Update, context: telegram.ext.ContextTypes.DE
 # -----------------------------
 def main():
     try:
-        # 使用 telegram.ext.ApplicationBuilder
         builder = telegram.ext.ApplicationBuilder().token(BOT_TOKEN)
         
         if PROXY_URL and PROXY_URL.strip():
             builder.proxy(PROXY_URL)
 
         app = builder.build()
-        # 使用 telegram.ext.MessageHandler 和 telegram.ext.filters
         app.add_handler(telegram.ext.MessageHandler(telegram.ext.filters.ChatType.PRIVATE, handler))
         
         # 仅在配置有效时执行心跳逻辑
