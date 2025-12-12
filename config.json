@@ -1,8 +1,9 @@
 {
   "bot": {
-    "token": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+    "token": "YOUR_BOT_TOKEN_HERE",
     "owner_id": 123456789,
-    "proxy_url": "socks5://127.0.0.1:10808"
+    "proxy_url": "",
+    "silent_forwarding": false 
   },
   "watchdog": {
     "heartbeat_file": "bot.heartbeat",
@@ -18,11 +19,8 @@
     },
     {
       "chat_id": -1005555555555,
-      "topic_ids": [1]
-    },
-    {
-      "chat_id": -1004444444444,
-      "topic_ids": [1, 2, 3]
+      "topic_ids": [1, 2],
+      "silent_forwarding": true
     }
   ]
 }
