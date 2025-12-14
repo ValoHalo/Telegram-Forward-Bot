@@ -2,3 +2,5 @@
 venv
 
 bot.heartbeat
+
+config.json

@@ -7,7 +7,7 @@ Python 3.12 （使用的是 20.7 版本的 Telegram bot Python 库，已知 Pyth
 # 用法
  1. 去 Botfarther 申请一个 Bot，并得到其 token
  2. 获取你自己的账号 ID，以及想要转发到的群组的 ID （一般是-100开头）和话题 ID（如果不是有话题的群组则不需要）
- 3. 填写 `config.json` 文件中的内容。由于 json 中不能添加注释，请参考下面的注释进行修改
+ 3. 将 `example.config.json` 重命名为 `config.json`，然后按照下面的说明填写其中的内容。（这样你以后可以用 `git pull` 来直接更新）
 ```json
 {
   "bot": { // 基础配置
