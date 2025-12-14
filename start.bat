@@ -5,7 +5,7 @@ chcp 65001 > nul
 setlocal
 @echo off
 set "VENV_NAME=.venv"
-set "PYTHON_VERSION=3.12" 
+set "PYTHON_VERSION=3.13" 
 set "PYTHON_SCRIPT=watchdog.py"
 set "REQUIREMENTS_FILE=requirements.txt"
 set "CONFIG_FILE=config.json"

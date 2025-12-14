@@ -12,319 +12,260 @@ import telegram.request
 # -------------------------------
 # 1. 初始化与日志
 # -------------------------------
-# 1.1 隐藏 httpx 轮询日志
+# 隐藏底层库如 httpx, httpcore, apscheduler 的调试日志，防止刷屏
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
-# 1.2 隐藏 apscheduler 的 Job 执行日志
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
 
-# 1.3 配置主程序日志格式和级别
+# 配置主程序日志格式和级别
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
-    # 已删除重复的 level=logging.INFO 配置
 )
 logger = logging.getLogger(__name__)
 
 # -------------------------------
-# 2. 统一配置加载逻辑
+# 2. 统一配置常量和全局变量
 # -------------------------------
 CONFIG_FILE = "config.json"
 
-# 全局配置变量
+# 全局配置变量 (由 load_config() 填充)
 BOT_TOKEN = None
 OWNER_ID = None
 PROXY_URL = None
 DESTINATIONS = []
-HB_FILE = None        # Heartbeat File Name
-HB_INTERVAL = None    # Heartbeat Interval (seconds)
-SILENT_FORWARDING = False # 全局静默转发标志
+HB_FILE = None        
+HB_INTERVAL = None    
+SILENT_FORWARDING = False 
+
+# 用于缓存媒体组（相册）消息的字典
+MEDIA_GROUP_CACHE = {} 
+
 
 def load_config():
-    """从 config.json 加载所有配置"""
+    """从 config.json 加载所有配置，并填充全局变量。"""
     global BOT_TOKEN, OWNER_ID, PROXY_URL, DESTINATIONS, HB_FILE, HB_INTERVAL, SILENT_FORWARDING
     
-    logger.info(f"📋 正在加载配置文件: {CONFIG_FILE}...")
+    logger.info(f"正在加载配置文件: {CONFIG_FILE}...")
 
     if not os.path.exists(CONFIG_FILE):
-        logger.critical(f"⛔ 找不到配置文件: {CONFIG_FILE}。程序将退出。")
+        logger.critical(f"找不到配置文件: {CONFIG_FILE}。程序将退出。")
         sys.exit(1)
 
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
 
-        # 加载 bot 部分配置
+        # 加载机器人主体配置
         bot_config = config.get("bot", {})
         BOT_TOKEN = bot_config.get("token")
         OWNER_ID = bot_config.get("owner_id")
         PROXY_URL = bot_config.get("proxy_url")
         SILENT_FORWARDING = bot_config.get("silent_forwarding", False)
         
-        # 加载 watchdog 部分配置
+        # 加载看门狗相关配置
         watchdog_config = config.get("watchdog", {})
         HB_FILE = watchdog_config.get("heartbeat_file")
         HB_INTERVAL = watchdog_config.get("heartbeat_interval_s")
 
-        # 加载 destinations 部分配置
+        # 加载转发目标列表配置
         DESTINATIONS = config.get("destinations", [])
 
         # 校验关键配置
         if not BOT_TOKEN or not OWNER_ID:
-            logger.critical("⛔ 未配置 BOT_TOKEN 或 OWNER_ID。程序将退出。")
+            logger.critical("未配置 BOT_TOKEN 或 OWNER_ID。程序将退出。")
             sys.exit(1)
 
+        # 确保 OWNER_ID 是整数类型
         if not isinstance(OWNER_ID, int):
             try:
                 OWNER_ID = int(OWNER_ID)
             except ValueError:
-                logger.critical("⛔ 'owner_id' 必须是数字。程序将退出。")
+                logger.critical("'owner_id' 必须是数字。程序将退出。")
                 sys.exit(1)
 
-        logger.info(f"✅ 配置加载成功。Owner ID: {OWNER_ID}")
-        logger.info(f"✅ 已加载 {len(DESTINATIONS)} 个转发目标规则。")
+        logger.info(f"配置加载成功。Owner ID: {OWNER_ID}")
+        logger.info(f"已加载 {len(DESTINATIONS)} 个转发目标规则。")
 
         if PROXY_URL:
-            logger.info(f"🌐 代理已启用: {PROXY_URL}")
+            logger.info(f"代理已启用: {PROXY_URL}")
         if SILENT_FORWARDING:
-             logger.info("🔇 全局静默转发已启用。")
+             logger.info("全局静默转发已启用。")
         if HB_FILE and HB_INTERVAL:
-            logger.info(f"❤️ 心跳配置：文件 {HB_FILE}，间隔 {HB_INTERVAL}s。")
+            logger.info(f"心跳配置：文件 {HB_FILE}，间隔 {HB_INTERVAL}s。")
 
-    except json.JSONDecodeError as e:
-        logger.critical(f"⛔ 配置文件 {CONFIG_FILE} 格式错误 (JSON 语法错误): {e}")
-        sys.exit(1)
     except Exception as e:
-        logger.critical(f"⛔ 加载配置文件时发生未知错误: {e}")
+        logger.critical(f"加载配置文件时发生错误: {e}")
         sys.exit(1)
 
 
-# 执行加载
-load_config()
-
-# MediaGroup 缓存
-MEDIA_GROUP_CACHE = {}
-
 # -------------------------------
-# 3. 任务: 心跳 (Heartbeat) - 异步单次执行
+# 3. 任务: 心跳 (Heartbeat)
 # -------------------------------
-
-
 async def heartbeat_task(context: telegram.ext.ContextTypes.DEFAULT_TYPE):
-    """周期性地更新心跳文件一次，由 JobQueue 负责重复调用"""
+    """周期性地更新心跳文件，防止看门狗超时重启。"""
     if not HB_FILE or not HB_INTERVAL:
         return
-
     try:
         with open(HB_FILE, 'w') as f:
             f.write(str(time.time()))
     except Exception as e:
-        logger.error(f"❌ 周期性写入心跳文件失败: {e}")
-
+        logger.error(f"周期性写入心跳文件失败: {e}")
 
 # -------------------------------
 # 4. 核心转发逻辑
 # -------------------------------
-
 async def forward_to_destinations(context: telegram.ext.ContextTypes.DEFAULT_TYPE, message=None, media_list=None):
-    """
-    核心分发函数：根据 DESTINATIONS 列表转发消息或媒体组。
-    """
-
-    # 定义发送动作的内部函数
-    async def send_action(chat_id, thread_id=None, is_silent=False): # 接收静默标志
+    """根据目标列表转发消息或媒体组。"""
+    # 内部函数：执行实际的发送操作
+    async def send_action(chat_id, thread_id=None, is_silent=False):
         target_str = f"{chat_id}" + (f" (Topic {thread_id})" if thread_id else "")
-
         try:
-            if not chat_id:
-                logger.error("❌ 目标配置缺少 'chat_id'，跳过此目标。")
-                return
+            if not chat_id: return
 
             params = {
                 "chat_id": chat_id,
                 "message_thread_id": thread_id,
-                "disable_notification": is_silent # 应用静默标志
+                "disable_notification": is_silent # 控制消息是否静默通知
             }
 
             if media_list:
-                # 发送相册
-                await context.bot.send_media_group(
-                    media=media_list, 
-                    **params
-                )
+                # 发送媒体组（相册）
+                await context.bot.send_media_group(media=media_list, **params)
             elif message:
-                # 转发单条
-                await message.copy(
-                    **params
-                )
+                # 转发单条消息
+                await message.copy(**params)
         
-        # 异常捕获块 (使用全名引用)
-        except httpx.RemoteProtocolError as e:
-            logger.critical(f"❌ 转发到 {target_str} 时发生连接错误 (RemoteProtocolError)。该目标可能暂时不可达或网络中断。错误信息: {e}")
-        except telegram.error.TelegramError as e:
-            logger.error(f"❌ 转发到 {target_str} 失败 (Telegram API Error): {e}")
         except Exception as e:
-            logger.error(f"❌ 转发到 {target_str} 失败 (Unknown Error): {e}", exc_info=True)
+            logger.error(f"转发到 {target_str} 失败: {e}")
 
-
-    # 遍历统一的目标列表
+    # 遍历所有目标配置
     for dest in DESTINATIONS:
         chat_id = dest.get('chat_id')
         topic_ids = dest.get('topic_ids', [])
-
-        target_threads = []
-
-        # 确定此目标的静默状态 (目标配置优先于全局配置)
+        # 目标配置的静默状态优先于全局配置
         is_silent_dest = dest.get('silent_forwarding', SILENT_FORWARDING) 
         
-        # 话题判断逻辑
-        if not topic_ids:
-            target_threads = [None]
-        else:
-            target_threads = topic_ids
+        # 确定需要转发的话题ID列表 (包含 None 代表主线程)
+        target_threads = topic_ids if topic_ids else [None]
 
-        # 对目标群组的每个话题（或主线程 None）执行发送
+        # 对每个话题执行发送
         for thread_id in target_threads:
-            await send_action(chat_id, thread_id=thread_id, is_silent=is_silent_dest) # 传递静默标志
-
+            await send_action(chat_id, thread_id=thread_id, is_silent=is_silent_dest)
 
 # -------------------------------
 # 5. 业务逻辑
 # -------------------------------
 async def process_media_group(context: telegram.ext.ContextTypes.DEFAULT_TYPE, media_group_id: str):
     """处理并转发媒体组 (相册)"""
-    # 延迟 2 秒，等待媒体组内的所有消息都到达
-    await asyncio.sleep(2)
-
-    if media_group_id not in MEDIA_GROUP_CACHE:
-        return
+    # 延迟 2 秒等待相册完整接收
+    await asyncio.sleep(2) 
+    if media_group_id not in MEDIA_GROUP_CACHE: return
 
     # 提取并清理缓存
     messages = MEDIA_GROUP_CACHE.pop(media_group_id)
-    # 按照消息 ID 排序，确保相册顺序
+    # 确保相册消息按顺序排列
     messages.sort(key=lambda x: x.message_id)
 
     media_list = []
     for msg in messages:
         caption = msg.caption
         entities = msg.caption_entities
-        
-        # 统一处理各种媒体类型
+        # 根据消息类型创建 InputMedia 对象
         if msg.photo:
-            media_list.append(telegram.InputMediaPhoto(
-                msg.photo[-1].file_id, caption=caption, caption_entities=entities))
+            media_list.append(telegram.InputMediaPhoto(msg.photo[-1].file_id, caption=caption, caption_entities=entities))
         elif msg.video:
-            media_list.append(telegram.InputMediaVideo(
-                msg.video.file_id, caption=caption, caption_entities=entities))
+            media_list.append(telegram.InputMediaVideo(msg.video.file_id, caption=caption, caption_entities=entities))
         elif msg.audio:
-            media_list.append(telegram.InputMediaAudio(
-                msg.audio.file_id, caption=caption, caption_entities=entities))
+            media_list.append(telegram.InputMediaAudio(msg.audio.file_id, caption=caption, caption_entities=entities))
         elif msg.document:
-            media_list.append(telegram.InputMediaDocument(
-                msg.document.file_id, caption=caption, caption_entities=entities))
+            media_list.append(telegram.InputMediaDocument(msg.document.file_id, caption=caption, caption_entities=entities))
 
     if media_list:
-        logger.info(f"📤 正在转发相册 (共 {len(media_list)} 个文件)")
+        logger.info(f"正在转发相册 (共 {len(media_list)} 个文件)")
         await forward_to_destinations(context, media_list=media_list)
-
 
 async def handler(update: telegram.Update, context: telegram.ext.ContextTypes.DEFAULT_TYPE):
     """主消息处理器：负责过滤消息并分发给转发函数"""
     msg = update.message
+    # 过滤：必须是私聊，且必须来自预设的 OWNER_ID
+    if not msg or msg.chat.type != "private" or msg.from_user.id != OWNER_ID: return
+    # 忽略命令
+    if msg.text and msg.text.startswith("/"): return
 
-    # 1. 消息过滤: 必须是私聊，且必须来自 OWNER_ID
-    if not msg or msg.chat.type != "private" or msg.from_user.id != OWNER_ID:
-        return
-    # 2. 忽略命令
-    if msg.text and msg.text.startswith("/"):
-        return
-
-    # 3. 媒体组 (相册) 处理逻辑
+    # 媒体组 (相册) 消息处理逻辑
     if msg.media_group_id:
         is_first = msg.media_group_id not in MEDIA_GROUP_CACHE
-
-        if is_first:
-            MEDIA_GROUP_CACHE[msg.media_group_id] = []
-
+        if is_first: MEDIA_GROUP_CACHE[msg.media_group_id] = []
         MEDIA_GROUP_CACHE[msg.media_group_id].append(msg)
-
         if is_first:
-            # 首次接收媒体组消息时，创建延迟处理任务
-            context.application.create_task(
-                process_media_group(context, msg.media_group_id))
+            # 首次接收时，创建延迟任务等待相册完整
+            context.application.create_task(process_media_group(context, msg.media_group_id))
         return
 
-    # 4. 单条消息处理
-    logger.info(f"📤 正在转发单条消息 (ID: {msg.message_id})")
+    # 单条消息处理
+    logger.info(f"正在转发单条消息 (ID: {msg.message_id})")
     await forward_to_destinations(context, message=msg)
-
 
 # -----------------------------
 # 主程序
 # -----------------------------
 def main():
     try:
-        # 1. 准备请求参数字典
+        # 在程序启动时加载所有配置
+        load_config()
+
+        # 1. 配置 HTTPX 客户端参数
         request_params = {
             "connection_pool_size": 8,
-            "read_timeout": 30.0,    # 30秒无数据则判定断开并触发重连
-            "connect_timeout": 20.0, # 20秒连接建立超时
-            "write_timeout": 30.0,   # 30秒普通消息写入超时
-            # media_write_timeout=60.0 # 解决 TypeError: 您的 PTB 版本可能不支持此参数
+            "read_timeout": 30.0,    # 30秒无数据断开触发重连
+            "connect_timeout": 20.0, # 连接建立超时
+            "write_timeout": 30.0,   # 普通消息写入超时
+            "media_write_timeout": 60.0 # 大媒体文件写入超时
         }
         
-        # 2. 【关键修复】将代理参数名从 'proxy_url' 更改为 'proxy'
+        # 2. 代理配置
         if PROXY_URL and PROXY_URL.strip():
-            logger.info(f"🌐 代理已配置并应用到 HTTPXRequest: {PROXY_URL}")
-            # 修复弃用警告：将 proxy_url 替换为 proxy
-            request_params["proxy"] = PROXY_URL 
+            logger.info(f"代理已配置: {PROXY_URL}")
+            request_params["proxy"] = PROXY_URL
         
-        # 3. 配置 HTTPXRequest，使用上面准备好的参数
+        # 3. 创建 HTTP 请求配置对象
         request_config = telegram.request.HTTPXRequest(**request_params)
 
         # 4. 构建 Application
+        # 通过 .request() 传入配置对象
         builder = telegram.ext.ApplicationBuilder().token(BOT_TOKEN).request(request_config)
-
-        # 【已移除】冲突的 builder.proxy(PROXY_URL) 调用
-
         app = builder.build()
+        
+        # 添加私聊消息处理 Handler
         app.add_handler(telegram.ext.MessageHandler(telegram.ext.filters.ChatType.PRIVATE, handler))
         
-        # 仅在配置有效时执行心跳逻辑
+        # 心跳任务配置
         if HB_FILE and HB_INTERVAL:
-            # 1. 立即生成心跳文件（首次启动不延迟），防止看门狗误判
-            logger.info("❤️ 正在创建初始心跳文件...")
             try:
-                with open(HB_FILE, 'w') as f:
-                    f.write(str(time.time()))
-            except Exception as e:
-                logger.error(f"❌ 首次写入心跳文件失败，请检查文件权限: {e}")
-
-            # 2. 启动周期性心跳任务
-            app.job_queue.run_repeating(
-                heartbeat_task,
-                interval=HB_INTERVAL
-            )
+                # 首次写入心跳文件，防止看门狗误判
+                with open(HB_FILE, 'w') as f: f.write(str(time.time()))
+            except Exception: pass
+            
+            # 启动周期性心跳任务
+            app.job_queue.run_repeating(heartbeat_task, interval=HB_INTERVAL)
         else:
-            logger.warning("⚠️ 心跳功能已禁用 (缺少配置)。")
+            logger.warning("心跳功能已禁用 (缺少配置)。")
 
-        logger.info(f"✅ 机器人已启动，正在监听...")
-
-        # 启动轮询
-        app.run_polling(
-            allowed_updates=telegram.Update.ALL_TYPES, close_loop=False)
+        logger.info(f"机器人已启动，正在监听...")
+        
+        # 启动长轮询
+        app.run_polling(allowed_updates=telegram.Update.ALL_TYPES, close_loop=False)
 
     except KeyboardInterrupt:
-        logger.info("👋 机器人接收到 Ctrl+C，正常关闭。")
-        # 退出时清理心跳文件
-        if HB_FILE and os.path.exists(HB_FILE):
-            os.remove(HB_FILE)
+        # 用户手动退出（Ctrl+C）
+        logger.info("正常退出。")
+        if HB_FILE and os.path.exists(HB_FILE): os.remove(HB_FILE)
         sys.exit(0)
     except Exception as e:
-        logger.critical(f"🔥 发生未捕获的严重错误，程序崩溃: {e}", exc_info=True)
-        # 异常退出时清理心跳文件
-        if HB_FILE and os.path.exists(HB_FILE):
-            os.remove(HB_FILE)
+        # 程序意外崩溃
+        logger.critical(f"程序崩溃: {e}", exc_info=True)
+        if HB_FILE and os.path.exists(HB_FILE): os.remove(HB_FILE)
         sys.exit(1)
 
 

@@ -1,4 +1,3 @@
 # 必须安装 socks 依赖，才能支持 SOCKS5 代理
-python-telegram-bot[socks]==20.7
-python-telegram-bot[job-queue]==20.7
+python-telegram-bot[socks,job-queue]
 httpx
