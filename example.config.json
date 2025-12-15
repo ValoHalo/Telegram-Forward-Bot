@@ -3,7 +3,8 @@
     "token": "YOUR_BOT_TOKEN_HERE",
     "owner_id": 123456789,
     "proxy_url": "",
-    "silent_forwarding": false 
+    "silent_forwarding": false,
+    "log_level": "INFO"
   },
   "watchdog": {
     "heartbeat_file": "bot.heartbeat",
@@ -11,6 +12,13 @@
     "heartbeat_timeout_s": 300,
     "restart_delay_s": 5,
     "max_consecutive_restarts": 5
+  },
+  "network": {
+    "read_timeout": 20.0,
+    "connect_timeout": 10.0,
+    "pool_timeout": 10.0,
+    "write_timeout": 20.0,
+    "media_write_timeout": 60.0
   },
   "destinations": [
     {
