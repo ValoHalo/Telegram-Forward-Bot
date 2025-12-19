@@ -30,6 +30,7 @@ CONNECT_TIMEOUT = 10.0
 POOL_TIMEOUT = 10.0
 WRITE_TIMEOUT = 20.0
 MEDIA_WRITE_TIMEOUT = 60.0
+POOL_SIZE = 2048
 
 # 用于缓存媒体组（相册）消息的字典
 MEDIA_GROUP_CACHE = {} 
@@ -37,8 +38,10 @@ MEDIA_GROUP_CACHE = {}
 
 def load_config():
     """从 config.json 加载所有配置，并填充全局变量。"""
-    global BOT_TOKEN, OWNER_ID, PROXY_URL, DESTINATIONS, HB_FILE, HB_INTERVAL, SILENT_FORWARDING
-    global LOG_LEVEL, READ_TIMEOUT, CONNECT_TIMEOUT, POOL_TIMEOUT, WRITE_TIMEOUT, MEDIA_WRITE_TIMEOUT
+    global BOT_TOKEN, OWNER_ID, PROXY_URL, DESTINATIONS
+    global HB_FILE, HB_INTERVAL, SILENT_FORWARDING
+    global LOG_LEVEL, READ_TIMEOUT, CONNECT_TIMEOUT, POOL_TIMEOUT
+    global WRITE_TIMEOUT, MEDIA_WRITE_TIMEOUT, POOL_SIZE
     
     logger.info(f"正在加载配置文件: {CONFIG_FILE}...")
 
@@ -70,6 +73,7 @@ def load_config():
         POOL_TIMEOUT = network_config.get("pool_timeout", 10.0)
         WRITE_TIMEOUT = network_config.get("write_timeout", 20.0)
         MEDIA_WRITE_TIMEOUT = network_config.get("media_write_timeout", 60.0)
+        POOL_SIZE = network_config.get("connection_pool_size", 2048)
 
         # 加载转发目标列表配置
         DESTINATIONS = config.get("destinations", [])
@@ -249,7 +253,7 @@ def main():
 
         # 3. 配置 HTTPX 客户端参数 (使用配置中的值，确保短超时)
         request_params = {
-            "connection_pool_size": 8,
+            "connection_pool_size": POOL_SIZE,
             "read_timeout": READ_TIMEOUT,    
             "connect_timeout": CONNECT_TIMEOUT, 
             "pool_timeout": POOL_TIMEOUT,       # 连接池获取超时
