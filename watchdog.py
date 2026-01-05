@@ -3,7 +3,8 @@ import sys
 import time
 import logging
 import os
-import json 
+import json
+import psutil  # 新增：用于深度清理进程树
 
 # -----------------------------------------
 #              看门狗配置
@@ -11,7 +12,6 @@ import json
 BOT_SCRIPT = "main.py"
 CONFIG_FILE = "config.json"
 
-# 默认值 (在 config.json 缺失或不完整时使用)
 DEFAULT_CONFIG = {
     "HB_FILE": "bot.heartbeat",
     "RESTART_DELAY": 5,
@@ -19,167 +19,106 @@ DEFAULT_CONFIG = {
     "MAX_RESTARTS": 5
 }
 
-# 配置看门狗日志
 logging.basicConfig(
     format="%(asctime)s - [WATCHDOG] - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger("Watchdog")
 
-
 def load_watchdog_config():
-    """加载必要的看门狗配置参数。"""
-    
     if not os.path.exists(CONFIG_FILE):
-        logger.warning(f"⚠️ 找不到配置文件 {CONFIG_FILE}，将使用默认看门狗参数。")
         return DEFAULT_CONFIG
-
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
-            
-        watchdog_config = config.get("watchdog", {})
-        
-        # 从配置中加载值，如果缺失则使用默认值
-        loaded_config = {
-            "HB_FILE": watchdog_config.get("heartbeat_file", DEFAULT_CONFIG["HB_FILE"]),
-            "RESTART_DELAY": watchdog_config.get("restart_delay_s", DEFAULT_CONFIG["RESTART_DELAY"]),
-            "HB_TIMEOUT": watchdog_config.get("heartbeat_timeout_s", DEFAULT_CONFIG["HB_TIMEOUT"]),
-            "MAX_RESTARTS": watchdog_config.get("max_consecutive_restarts", DEFAULT_CONFIG["MAX_RESTARTS"])
+        wc = config.get("watchdog", {})
+        return {
+            "HB_FILE": wc.get("heartbeat_file", DEFAULT_CONFIG["HB_FILE"]),
+            "RESTART_DELAY": wc.get("restart_delay_s", DEFAULT_CONFIG["RESTART_DELAY"]),
+            "HB_TIMEOUT": wc.get("heartbeat_timeout_s", DEFAULT_CONFIG["HB_TIMEOUT"]),
+            "MAX_RESTARTS": wc.get("max_consecutive_restarts", DEFAULT_CONFIG["MAX_RESTARTS"])
         }
-        logger.info(f"✅ 看门狗参数已加载。超时: {loaded_config['HB_TIMEOUT']}s, 最大重启: {loaded_config['MAX_RESTARTS']}次。")
-        return loaded_config
-
-    except (json.JSONDecodeError, Exception) as e:
-        logger.error(f"❌ 加载或解析配置文件时发生错误: {e}。将使用默认看门狗参数。")
+    except:
         return DEFAULT_CONFIG
 
-# 加载配置
-LOADED_CONFIG = load_watchdog_config()
+# 初始化配置
+CONF = load_watchdog_config()
 
-# 使用加载后的值定义常量
-HEARTBEAT_FILE = LOADED_CONFIG["HB_FILE"]
-RESTART_DELAY = LOADED_CONFIG["RESTART_DELAY"]
-HEARTBEAT_TIMEOUT = LOADED_CONFIG["HB_TIMEOUT"]
-MAX_CONSECUTIVE_RESTARTS = LOADED_CONFIG["MAX_RESTARTS"]
-# -----------------------------------------
-#              看门狗配置 (结束)
-# -----------------------------------------
+def kill_process_tree(pid):
+    """【核心改进】彻底清理进程及其所有子进程"""
+    try:
+        parent = psutil.Process(pid)
+        children = parent.children(recursive=True)
+        for child in children:
+            logger.warning(f"正在强制终止子进程: {child.pid}")
+            child.kill() # 发送 SIGKILL
+        logger.warning(f"正在强制终止主进程: {parent.pid}")
+        parent.kill()
+    except psutil.NoSuchProcess:
+        pass
+    except Exception as e:
+        logger.error(f"清理进程树时发生错误: {e}")
 
+def cleanup_environment():
+    """重启前的物理清理"""
+    if os.path.exists(CONF["HB_FILE"]):
+        try:
+            os.remove(CONF["HB_FILE"])
+            logger.info("🗑️ 已清理过期心跳文件。")
+        except: pass
 
 def is_heartbeat_alive():
-    """检查心跳文件是否在 HEARTBEAT_TIMEOUT 时间内更新"""
-    if not os.path.exists(HEARTBEAT_FILE):
-        # 心跳文件不存在可能是首次启动或刚被删除，不代表卡死
-        return False
-        
+    if not os.path.exists(CONF["HB_FILE"]):
+        return True # 文件不存在时不立即判定死亡，等待下次检查
     try:
-        last_update = os.path.getmtime(HEARTBEAT_FILE)
-        current_time = time.time()
-        
-        # 检查时间差
-        if (current_time - last_update) > HEARTBEAT_TIMEOUT:
-            logger.warning(f"⏰ 心跳文件最后更新时间: {time.ctime(last_update)}。已超时 {(current_time - last_update):.2f}s。")
+        last_update = os.path.getmtime(CONF["HB_FILE"])
+        if (time.time() - last_update) > CONF["HB_TIMEOUT"]:
             return False
         return True
-    except Exception as e:
-        logger.error(f"❌ 检查心跳文件失败: {e}")
+    except:
         return False
 
-
-def cleanup_heartbeat_file():
-    """清理心跳文件"""
-    if os.path.exists(HEARTBEAT_FILE):
-        os.remove(HEARTBEAT_FILE)
-        logger.info("🗑️ 已清理心跳文件。")
-
-
-def start_bot_with_watchdog():
-    """循环启动机器人子进程并监控心跳和退出码"""
-    logger.info(f"🤖 看门狗已启动，监控脚本: {BOT_SCRIPT}")
-    
-    command = [sys.executable, BOT_SCRIPT]
-    process = None
+def start_bot():
+    logger.info(f"🤖 看门狗启动，监控: {BOT_SCRIPT}")
     consecutive_failures = 0
     
     while True:
-        if process is None:
-            # 检查是否达到重启限制
-            if consecutive_failures >= MAX_CONSECUTIVE_RESTARTS:
-                logger.critical(f"❌ 机器人连续失败次数达到 {MAX_CONSECUTIVE_RESTARTS} 次。为避免资源滥用，看门狗已停止运行。")
-                cleanup_heartbeat_file()
-                sys.exit(1)
-            
-            # 启动机器人
-            logger.info(f"🚀 正在启动机器人程序 ({BOT_SCRIPT})... (当前连续失败次数: {consecutive_failures})")
-            process = subprocess.Popen(command)
+        if consecutive_failures >= CONF["MAX_RESTARTS"]:
+            logger.critical("❌ 连续失败次数过多，看门狗停止。")
+            sys.exit(1)
+
+        cleanup_environment()
+        logger.info(f"🚀 正在启动机器人... (失败计数: {consecutive_failures})")
+        
+        # 启动子进程
+        process = subprocess.Popen([sys.executable, BOT_SCRIPT])
         
         try:
-            # 持续监控
-            while process.poll() is None: 
-                time.sleep(15) # 降低检查频率以节省资源
-
-                if not is_heartbeat_alive():
-                    # --- 1. 心跳超时，强制重启流程 ---
-                    logger.critical(f"🔥 机器人心跳超时 (> {HEARTBEAT_TIMEOUT}s)，判定卡死，强制重启!")
-                    
-                    # 强制终止子进程
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                    
-                    # 递增失败计数，重置进程，并清除心跳文件
-                    consecutive_failures += 1
-                    process = None
-                    cleanup_heartbeat_file()
-                         
-                    break # 退出内部循环，进入重启等待
+            while process.poll() is None:
+                time.sleep(15) # 每15秒检查一次心跳
                 
-            # --- 2. 退出监控循环后的检查 ---
+                if not is_heartbeat_alive():
+                    logger.critical(f"🔥 检测到心跳超时 (> {CONF['HB_TIMEOUT']}s)！")
+                    kill_process_tree(process.pid) # 彻底杀掉
+                    consecutive_failures += 1
+                    break
             
-            if process is None:
-                # 如果 process 为 None，说明是上面心跳超时触发的重启
-                logger.info(f"⏳ {RESTART_DELAY}秒后尝试自动重启...")
-                time.sleep(RESTART_DELAY)
-                continue
-            
-            # 如果程序执行到这里，说明子进程是自行退出的
-            exit_code = process.returncode
-            
-            if exit_code == 0:
-                # 正常退出：重置失败计数
-                logger.info("✅ 机器人正常退出 (退出码 0)。看门狗停止监控。")
-                consecutive_failures = 0
-                break
-            else:
-                # 异常退出：递增失败计数
-                logger.error(f"🚨 机器人异常退出 (退出码: {exit_code})。")
-                consecutive_failures += 1
-                process = None
-                logger.info(f"⏳ {RESTART_DELAY}秒后尝试自动重启...")
-                time.sleep(RESTART_DELAY)
+            # 进程退出后的处理
+            if process.returncode is not None:
+                if process.returncode == 0:
+                    logger.info("✅ 机器人正常退出。")
+                    break
+                else:
+                    logger.error(f"🚨 机器人异常退出 (码: {process.returncode})")
+                    consecutive_failures += 1
+                    
+            logger.info(f"⏳ {CONF['RESTART_DELAY']}秒后彻底重启...")
+            time.sleep(CONF["RESTART_DELAY"])
 
         except KeyboardInterrupt:
-            # 优雅退出 (用户按 Ctrl+C)
-            logger.info("🛑 接收到停止指令 (Ctrl+C)，正在关闭机器人...")
-            if process:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-            cleanup_heartbeat_file()
-            logger.info("看门狗正常退出。")
+            logger.info("🛑 收到指令，正在关闭...")
+            kill_process_tree(process.pid)
             sys.exit(0)
-        except Exception as e:
-            # 看门狗自身错误，等待后重试
-            logger.critical(f"🚨 看门狗自身发生错误: {e}", exc_info=True)
-            process = None
-            consecutive_failures += 1 
-            time.sleep(RESTART_DELAY)
-
 
 if __name__ == "__main__":
-    start_bot_with_watchdog()
+    start_bot()
