@@ -10,7 +10,26 @@ import httpx
 import telegram.request
 
 # -------------------------------
-# 1. 统一配置常量和全局变量
+# 致命错误监听器
+# -------------------------------
+class FatalErrorFilter(logging.Filter):
+    """
+    监听日志，一旦发现连接池耗尽的底层报错，直接强制杀死进程。
+    这样 Watchdog 就能检测到退出并重启程序。
+    """
+    def filter(self, record):
+        log_msg = record.getMessage()
+        # 关键词匹配：同时包含 "Pool timeout" 和 "occupied"
+        if "Pool timeout" in log_msg and "occupied" in log_msg:
+            sys.stderr.write(f"\n🚨 [自毁程序] 检测到连接池死锁日志: {log_msg}\n")
+            sys.stderr.write("🚨 正在强制退出以触发看门狗重启...\n")
+            # 强制立即退出 (退出码 1 代表错误)
+            os._exit(1) 
+        return True
+
+
+# -------------------------------
+# 统一配置常量和全局变量
 # -------------------------------
 CONFIG_FILE = "config.json"
 
@@ -101,7 +120,7 @@ def load_config():
 
 
 # -------------------------------
-# 2. 初始化日志 (动态设置)
+# 初始化日志
 # -------------------------------
 # 隐藏底层库如 httpx, httpcore, apscheduler 的调试日志，防止刷屏
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -112,7 +131,7 @@ logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # -------------------------------
-# 3. 任务: 心跳 (Heartbeat) - 周期性任务
+# 任务: 心跳
 # -------------------------------
 async def heartbeat_task(context: telegram.ext.ContextTypes.DEFAULT_TYPE):
     """周期性地更新心跳文件，证明事件循环正在运行（防止空闲超时）。"""
@@ -125,22 +144,18 @@ async def heartbeat_task(context: telegram.ext.ContextTypes.DEFAULT_TYPE):
         logger.error(f"周期性写入心跳文件失败: {e}")
 
 # -------------------------------
-# 4. 任务: 错误处理 (强制退出)
+# 任务: 错误处理
 # -------------------------------
 async def error_handler(update: object, context: telegram.ext.ContextTypes.DEFAULT_TYPE):
-    """
-    全局错误处理器。当检测到网络超时等严重错误时，强制退出进程以触发看门狗重启。
-    """
     logger.error(f"发生未捕获异常: {context.error}")
     
-    # 检查是否为 httpx 相关的连接或读取超时
-    if isinstance(context.error, (httpx.ConnectTimeout, httpx.ReadTimeout)):
-        logger.critical("检测到连接或读取超时，强制退出以触发看门狗重启...")
-        # 强制终止整个进程，避免 asyncio 挂起
+    # 增加 httpx.PoolTimeout 到检查列表中
+    if isinstance(context.error, (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.PoolTimeout)):
+        logger.critical("检测到严重网络超时 (连接/读取/池耗尽)，强制退出...")
         os._exit(1)
 
 # -------------------------------
-# 5. 核心转发逻辑
+# 核心转发逻辑
 # -------------------------------
 async def forward_to_destinations(context: telegram.ext.ContextTypes.DEFAULT_TYPE, message=None, media_list=None):
     """根据目标列表转发消息或媒体组。"""
@@ -181,7 +196,7 @@ async def forward_to_destinations(context: telegram.ext.ContextTypes.DEFAULT_TYP
             await send_action(chat_id, thread_id=thread_id, is_silent=is_silent_dest)
 
 # -------------------------------
-# 6. 业务逻辑
+# 业务逻辑
 # -------------------------------
 async def process_media_group(context: telegram.ext.ContextTypes.DEFAULT_TYPE, media_group_id: str):
     """处理并转发媒体组 (相册)"""
@@ -250,6 +265,17 @@ def main():
         # 重新获取 logger 实例以应用新级别
         global logger
         logger = logging.getLogger(__name__)
+
+        # ==========================================
+        # 挂载致命错误监听器
+        # ==========================================
+        # 获取 telegram.ext 的 logger (即使全局是 INFO，这里也强制开启 DEBUG 以便捕获底层错误)
+        tg_ext_logger = logging.getLogger("telegram.ext")
+        tg_ext_logger.addFilter(FatalErrorFilter())
+        # 只有开启 DEBUG 级别，库才会吐出 "Network Retry Loop" 这条日志
+        # 我们单独把这个库的级别调低，以确保 Filter 能抓到它
+        tg_ext_logger.setLevel(logging.DEBUG)
+        # ==========================================
 
         # 3. 配置 HTTPX 客户端参数 (使用配置中的值，确保短超时)
         request_params = {
